@@ -7,78 +7,78 @@
 ################################################################################
 
 #####   VARIABILI DI CONFIGURAZIONE    #####
-OE_VERSION=""
+OE_VERSION="14.0"
 OE_USER="odoo"
 OE_PORT="8069"
-OE_HOME="/home/$OE_USER"
-OE_HOME_SRV="$OE_HOME/${OE_USER}-server-${OE_VERSION}"
-VENV_PATH="$OE_HOME/odoo-venv/odoo-venv-${OE_VERSION}"
-CUSTOM_ADDONS="$OE_HOME/custom-addons"  # Rimosso spazio dopo =
+OE_HOME="/home/$OE_USER"                                                 #/home/odoo
+OE_HOME_SRV="$OE_HOME/${OE_USER}-server/${OE_USER}-server-${OE_VERSION}" #/home/odoo/odoo-server/odoo-server14
+VENV_PATH="$OE_HOME/odoo-venv/odoo-venv-${OE_VERSION}"                   #/home/odoo/odoo-venv/odoo-venv14
+CUSTOM_ADDONS="$OE_HOME/custom-addons${OE_VERSION}"                      #/home/odoo/custom-addons14
+
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+
+cleanup() {
+    local exit_code=$?
+    echo -e "\n---- Lo script si arresterà ----"
+    if [ $exit_code -ne 0 ]; then
+        echo "Script interrotto: $1"
+        echo "Codice di uscita: $exit_code"
+    fi
+}
+
+trap 'cleanup' EXIT
+trap 'cleanup "Ricevuto segnale di interruzione"' INT TERM
 
 #####   VERIFICHE PRELIMINARI    #####
-# Verifica se è stata specificata la versione
-if [ -z "$OE_VERSION" ]; then
-    echo "Errore: OE_VERSION non è impostata"
-    echo "Imposta OE_VERSION con una versione valida di Odoo (es. 16.0, 17.0)"
-    exit 1
-fi
-
-# Verifica se lo script è eseguito come root
-if [ "$(id -u)" != "0" ]; then
-   echo "Questo script deve essere eseguito come root" 
-   exit 1
-fi
-
-# Verifica Ubuntu e versione
 if ! grep -q "Ubuntu" /etc/os-release; then
     echo "Questo script è progettato per sistemi Ubuntu"
+    cleanup "Sistema operativo non supportato."
+fi
+
+if [ -z "$OE_VERSION" ]; then
+    echo "Errore: OE_VERSION non è impostata"
+    echo "Imposta OE_VERSION con una versione valida di Odoo (es. 14.0)"
+    cleanup "Versione Odoo non specificata"
     exit 1
 fi
 
-# Verifica versione specifica di Ubuntu
-UBUNTU_VERSION=$(lsb_release -rs)
-if [ -z "$UBUNTU_VERSION" ]; then
-    echo "Impossibile determinare la versione di Ubuntu"
+echo -e "\n---- Verifico versione Python ----"
+
+if [ "$(printf '3.6\n%s' "$PYTHON_VERSION" | sort -V | head -n1)" != "3.6" ]; then
+    echo "⚠️  Errore: Odoo 14 richiede Python 3.6 o superiore"
+    echo "Versione Python attuale: $PYTHON_VERSION"
+    cleanup "Versione Python non compatibile"
     exit 1
 fi
 
-echo -e "\n---- Verifico compatibilità versione Ubuntu ----"
-if (( $(echo "$UBUNTU_VERSION < 20.04" | bc -l) )); then
-    echo "Questo script richiede Ubuntu 20.04 o superiore"
-    echo "Versione attuale: $UBUNTU_VERSION"
-    exit 1
-fi
+echo -e "\n---- Verifico versione Postgres ----"
 
-echo -e "\n---- Aggiornamento del sistema ----"
-sudo apt update && sudo apt upgrade -y
+if ! command -v psql &> /dev/null; then
+    echo "PostgreSQL non è installato. Procedo con l'installazione..."
+    
+    echo -e "\n---- Installo PostgreSQL ----"
+    sudo apt install -y postgresql postgresql-server-dev-all
+    
+    echo -e "\n---- Abilito PostgreSQL ----"
+    sudo systemctl start postgresql
+    sudo systemctl enable postgresql
 
-echo -e "\n---- Installo Python e dipendenze di base ----"
-sudo apt install -y python3-minimal python3-dev python3-pip python3-venv python3-setuptools \
-    build-essential libzip-dev libxslt1-dev libldap2-dev python3-wheel libsasl2-dev node-less \
-    libjpeg-dev xfonts-utils libpq-dev libffi-dev fontconfig git wget libcairo2-dev pkg-config \
-    wheel setuptools
+    PG_VERSION=$(psql -V | grep -oP '\d+' | head -1)
 
-#####   INSTALLAZIONE POSTGRESQL    #####
-echo -e "\n---- Installo PostgreSQL ----"
-sudo apt install -y postgresql postgresql-server-dev-all
-
-echo -e "\n---- Abilito PostgreSQL ----"
-sudo systemctl start postgresql
-sudo systemctl enable postgresql
-
-echo -e "\n---- Creo utente odoo per il db ----"
-if sudo -u postgres createuser -s "$OE_USER" 2>/dev/null; then
-    echo "Utente PostgreSQL '$OE_USER' creato con successo."
-else
-    echo "Errore: impossibile creare l'utente PostgreSQL '$OE_USER'."
-    echo "Verifica se l'utente esiste già con: sudo -u postgres psql -c \"\\du\""
+    if [ "$(printf '10\n%s' "$PG_VERSION" | sort -V | head -n1)" != "10" ]; then
+        echo "⚠️  Errore: Odoo 14 richiede PostgreSQL 10 o superiore"
+        echo "Versione PostgreSQL attuale: $PG_VERSION"
+        cleanup "Versione PostgreSQL non compatibile"
+        exit 1
+    fi
+    echo "✅ Versione PostgreSQL compatibile: $PG_VERSION"
 fi
 
 #####   INSTALLAZIONE WKHTMLTOPDF    #####
 echo -e "\n---- Installo wkhtmltopdf e dipendenze ----"
 sudo apt install -y wkhtmltopdf xfonts-75dpi xfonts-base
 
-#####   CONFIGURAZIONE ODOO    #####
+#####   CONFIGURAZIONE ODOO   #####
 echo -e "\n---- Creo utente odoo e lo aggiungo al gruppo odoo----"
 sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
 
@@ -109,7 +109,7 @@ sudo npm install -g rtlcss
 
 #####   CONFIGURAZIONE FILE ODOO    #####
 echo -e "\n---- Creo odoo.conf ----"
-sudo tee $OE_HOME/$OE_USER.conf > /dev/null <<EOF
+sudo nano $OE_HOME/$OE_USER.conf <<EOF
 [options]
 ; Questo è il file di configurazione per $OE_USER
 admin_passwd = admin
@@ -125,7 +125,7 @@ addons_path = $OE_HOME_SRV/addons,$CUSTOM_ADDONS/OCA/web
 EOF
 
 echo -e "\n---- Creo launch.sh per debug ----"
-sudo tee $OE_HOME_SRV/launch.sh > /dev/null <<EOF
+sudo nano $OE_HOME_SRV/launch.sh <<EOF
 #!/bin/bash
 $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all
 EOF
@@ -146,5 +146,5 @@ sudo chmod +x $OE_HOME_SRV/launch.sh
 echo -e "\n                     ✅ Installazione di Odoo completata!"
 echo "--------------------------------------------------------------------------------------------"
 echo "                      Ora puoi lanciare Odoo tramite lo script di lancio"
-echo "                      cd /home/odoo/odoo-server${OE_VERSION} && ./launch.sh                 "
+echo "                      cd /home/odoo/odoo-server/odoo-server${OE_VERSION} && ./launch.sh                 "
 echo "--------------------------------------------------------------------------------------------"
