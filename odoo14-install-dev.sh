@@ -1,20 +1,34 @@
 #!/bin/bash
 ################################################################################
-# Script per l'installazione di Odoo CE in ambiente di sviluppo
-# Uso: 
-# 1. sudo chmod +x odoo-install-dev.sh
-# 2. ./odoo-install-dev.sh
+# Questo script automatizza l'installazione di Odoo Community Edition (CE) 
+# in un ambiente di sviluppo. 
+#
+# Istruzioni per l'uso:
+# 1. Rendere eseguibile lo script con il comando: 
+#    sudo chmod +x odoo-install-dev.sh
+# 2. Eseguire lo script con il comando:
+#    ./odoo-install-dev.sh
+#
+# Funzionalità principali:
+# - Configurazione dell'ambiente di sviluppo per Odoo CE.
+# - Installazione delle dipendenze necessarie, tra cui:
+#   - PostgreSQL e librerie di sviluppo.
+#   - wkhtmltopdf e font richiesti.
+#   - Node.js, npm e rtlcss per il supporto LTR.
+#   - Virtual Environment e pacchetti Python richiesti.
 ################################################################################
 
 #####   VARIABILI DI CONFIGURAZIONE    #####
 OE_VERSION="14.0"
 OE_USER="odoo"
 OE_PORT="8069"
-OE_HOME="/home/$OE_USER"                                                 #/home/odoo
-OE_HOME_SRV="$OE_HOME/${OE_USER}-server/${OE_USER}-server-${OE_VERSION}" #/home/odoo/odoo-server/odoo-server14
-VENV_PATH="$OE_HOME/odoo-venv/odoo-venv-${OE_VERSION}"                   #/home/odoo/odoo-venv/odoo-venv14
-CUSTOM_ADDONS="$OE_HOME/custom-addons${OE_VERSION}"                      #/home/odoo/custom-addons14
+OE_HOME="/home/$OE_USER"                                                         #/home/odoo
+ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d'.' -f1)
+OE_HOME_SRV="$OE_HOME/${OE_USER}${ODOO_MAJOR_VERSION}"                           #/home/odoo/odoo18
+VENV_PATH="$OE_HOME/venv/venv${ODOO_MAJOR_VERSION}"                              #/home/odoo/venv14
+CUSTOM_ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                      #/home/odoo/addons/addons14
 
+CURRENT_USER=$(whoami)
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
 
 cleanup() {
@@ -65,7 +79,7 @@ if ! command -v psql &> /dev/null; then
 
     PG_VERSION=$(psql -V | grep -oP '\d+' | head -1)
 
-    if [ "$(printf '10\n%s' "$PG_VERSION" | sort -V | head -n1)" != "10" ]; then
+    if [ "$PG_VERSION" -lt 10 ]; then
         echo "⚠️  Errore: Odoo 14 richiede PostgreSQL 10 o superiore"
         echo "Versione PostgreSQL attuale: $PG_VERSION"
         cleanup "Versione PostgreSQL non compatibile"
@@ -74,42 +88,84 @@ if ! command -v psql &> /dev/null; then
     echo "✅ Versione PostgreSQL compatibile: $PG_VERSION"
 fi
 
-#####   INSTALLAZIONE WKHTMLTOPDF    #####
-echo -e "\n---- Installo wkhtmltopdf e dipendenze ----"
-sudo apt install -y wkhtmltopdf xfonts-75dpi xfonts-base
+echo -e "\n---- Aggiornamento del sistema ----"
+sudo apt update && sudo apt upgrade -y
 
-#####   CONFIGURAZIONE ODOO   #####
-echo -e "\n---- Creo utente odoo e lo aggiungo al gruppo odoo----"
-sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
+echo -e "\n---- Installo dipendenze di sistema ----"
+sudo apt install -y \
+    python3-minimal python3-dev python3-full python3-pip python3-venv python3-setuptools \
+    build-essential libzip-dev libxslt1-dev libldap2-dev python3-wheel \
+    libsasl2-dev node-less libjpeg-dev xfonts-utils libpq-dev libffi-dev \
+    fontconfig git wget libcairo2-dev pkg-config \
+    wkhtmltopdf xfonts-75dpi xfonts-base || {
+    echo "❌ Installazione delle dipendenze di sistema fallita"
+    exit 1
+}
 
-echo -e "\n---- Creo directory necessarie ----"
-sudo mkdir -p $OE_HOME/logs $OE_HOME/data $CUSTOM_ADDONS/OCA
+echo -e "\n---- Configuro Utente e directory Odoo ----"
+if ! id "$OE_USER" &>/dev/null; then
+    sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
+fi
 
-echo -e "\n---- Clono odoo in base alla versione selezionata ----"
-sudo git clone https://github.com/odoo/odoo.git --depth 1 -b $OE_VERSION $OE_HOME_SRV
+echo -e "\n---- Creo utente odoo per il DB ----"
+if sudo -u postgres createuser -s "$OE_USER" 2>/dev/null; then
+    echo "Utente PostgreSQL '$OE_USER' creato con successo."
+else
+    echo "Errore: impossibile creare l'utente PostgreSQL '$OE_USER'."
+    echo "Verifica se l'utente esiste già con: sudo -u postgres psql -c \"\\du\""
+fi
 
-echo -e "\n---- Clono repository OCA/web in base alla versione selezionata ----"
-sudo git clone https://github.com/OCA/web.git --depth 1 -b $OE_VERSION $CUSTOM_ADDONS/OCA/web
+for DIR in "$OE_HOME/logs" "$OE_HOME/data" "$CUSTOM_ADDONS/OCA"; do
+    sudo mkdir -p "$DIR" || {
+        echo "❌ Impossibile creare la directory: $DIR"
+        exit 1
+    }
+done
 
-#####   CONFIGURAZIONE AMBIENTE PYTHON    #####
-echo -e "\n---- Creo il Virtual Environment ----"
-sudo python3 -m venv $VENV_PATH
+echo -e "\n---- Clono le Repository Odoo e OCA/web ----"
+if [ ! -d "$OE_HOME_SRV" ]; then
+    sudo git clone https://github.com/odoo/odoo.git --depth 1 -b "$OE_VERSION" "$OE_HOME_SRV" || {
+        echo "❌ Impossibile clonare il repository Odoo"
+        exit 1
+    }
+fi
 
-echo -e "\n---- Attivo il venv e installo requirements ----"
-source $VENV_PATH/bin/activate
-pip install --upgrade pip
-pip install -r $OE_HOME_SRV/requirements.txt
+if [ ! -d "$CUSTOM_ADDONS/OCA/web" ]; then
+    sudo git clone https://github.com/OCA/web.git --depth 1 -b "$OE_VERSION" "$CUSTOM_ADDONS/OCA/web" || {
+        echo "❌ Impossibile clonare il repository OCA/web"
+        exit 1
+    }
+fi
+
+echo -e "\n---- Configuro l'Ambiente Virtuale Python ----"
+sudo mkdir -p "$VENV_PATH"
+sudo chown -R $CURRENT_USER:$CURRENT_USER $VENV_PATH
+if [ ! -d "$VENV_PATH" ]; then
+    sudo python3 -m venv "$VENV_PATH" || {
+        echo "❌ Impossibile creare l'ambiente virtuale"
+        exit 1
+    }
+fi
+
+echo -e "\n---- Installo le Dipendenze Python ----"
+source "$VENV_PATH/bin/activate"
+pip install -r "$OE_HOME_SRV/requirements.txt" || {
+    echo "❌ Impossibile installare i requisiti di Odoo"
+    exit 1
+}
 pip install debugpy
+pip install jingtrang
 deactivate
 
 #####   INSTALLAZIONE NODE.JS E RTLCSS    #####
 echo -e "\n---- Installo nodeJS NPM e rtlcss per LTR support ----"
-sudo apt-get install nodejs npm -y
+sudo apt install nodejs npm -y
 sudo npm install -g rtlcss
 
 #####   CONFIGURAZIONE FILE ODOO    #####
 echo -e "\n---- Creo odoo.conf ----"
-sudo nano $OE_HOME/$OE_USER.conf <<EOF
+sudo touch $OE_HOME/$OE_USER.conf
+sudo bash -c "echo '
 [options]
 ; Questo è il file di configurazione per $OE_USER
 admin_passwd = admin
@@ -121,30 +177,26 @@ data_dir = $OE_HOME/data
 http_port = ${OE_PORT}
 xmlrpc_port = ${OE_PORT}
 logfile = $OE_HOME/logs/odoo.log
-addons_path = $OE_HOME_SRV/addons,$CUSTOM_ADDONS/OCA/web
-EOF
+addons_path = $OE_HOME_SRV/addons,$CUSTOM_ADDONS/OCA/web' > $OE_HOME/$OE_USER.conf"
 
 echo -e "\n---- Creo launch.sh per debug ----"
-sudo nano $OE_HOME_SRV/launch.sh <<EOF
+sudo touch $OE_HOME_SRV/launch.sh 
+sudo bash -c "echo '
 #!/bin/bash
-$VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all
-EOF
+$VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all' > $OE_HOME_SRV/launch.sh "
+sudo chown $CURRENT_USER:$CURRENT_USER "$OE_HOME_SRV/launch.sh"
+sudo chmod +x "$OE_HOME_SRV/launch.sh"
 
-#####   IMPOSTAZIONE PERMESSI    #####
-echo -e "\n---- Imposto i permessi ----"
-sudo chown -R $OE_USER:$OE_USER $OE_HOME
-sudo chmod -R 755 $OE_HOME
+
+echo -e "\n---- Aggiusto i permessi delle cartelle ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV
-sudo chmod -R 755 $OE_HOME_SRV
-sudo chown -R $OE_USER:$OE_USER $VENV_PATH
-sudo chmod -R 755 $VENV_PATH
 sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
-sudo chmod -R 755 $CUSTOM_ADDONS
-sudo chmod +x $OE_HOME_SRV/launch.sh
 
-#####   COMPLETAMENTO    #####
+sudo chmod -R u+rwx $VENV_PATH
+
+#####    COMPLETAMENTO    #####
 echo -e "\n                     ✅ Installazione di Odoo completata!"
-echo "--------------------------------------------------------------------------------------------"
-echo "                      Ora puoi lanciare Odoo tramite lo script di lancio"
-echo "                      cd /home/odoo/odoo-server/odoo-server${OE_VERSION} && ./launch.sh                 "
-echo "--------------------------------------------------------------------------------------------"
+echo "-----------------------------------------------------------------------------------------------------------------"
+echo "                          Ora puoi lanciare Odoo tramite lo script di lancio                                     "
+echo "                                  cd ${OE_HOME_SRV} && ./launch                                                  "
+echo "-----------------------------------------------------------------------------------------------------------------"
