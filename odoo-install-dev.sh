@@ -19,7 +19,7 @@
 ################################################################################
 
 #####   VARIABILI DI CONFIGURAZIONE    #####
-OE_VERSION="14.0"
+OE_VERSION="18.0"
 OE_USER="odoo"
 OE_PORT="8069"
 OE_HOME="/home/$OE_USER"                                                         #/home/odoo
@@ -50,8 +50,8 @@ if ! grep -q "Ubuntu" /etc/os-release; then
 fi
 
 if [ -z "$OE_VERSION" ]; then
-    echo "Errore: OE_VERSION non è impostata"
-    echo "Imposta OE_VERSION con una versione valida di Odoo (es. 14.0)"
+    echo "Errore: $OE_VERSION non è impostata"
+    echo "Imposta $OE_VERSION con una versione valida di Odoo (es. 14.0)"
     cleanup "Versione Odoo non specificata"
     exit 1
 fi
@@ -88,6 +88,22 @@ if ! command -v psql &> /dev/null; then
     echo "✅ Versione PostgreSQL compatibile: $PG_VERSION"
 fi
 
+echo -e "\n---- Creo utente Postgres Odoo e NIU o CSG  ----"
+sudo -u postgres createuser -s odoo
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='NIU'" | grep -q 1; then
+    echo "Creo utente PostgreSQL 'NIU'..."
+    sudo -u postgres createuser -s NIU
+    echo "✅ Utente PostgreSQL 'NIU' creato con successo"
+else
+    if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='CSG'" | grep -q 1; then
+        echo "Creo utente PostgreSQL 'CSG'..."
+        sudo -u postgres createuser -s CSG
+        echo "✅ Utente PostgreSQL 'CSG' creato con successo"
+    else
+        echo "⚠️  Gli utenti PostgreSQL 'NIU' e 'CSG' esistono già"
+    fi
+fi
+
 echo -e "\n---- Aggiornamento del sistema ----"
 sudo apt update && sudo apt upgrade -y
 
@@ -107,14 +123,6 @@ if ! id "$OE_USER" &>/dev/null; then
     sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
 fi
 
-echo -e "\n---- Creo utente odoo per il DB ----"
-if sudo -u postgres createuser -s "$OE_USER" 2>/dev/null; then
-    echo "Utente PostgreSQL '$OE_USER' creato con successo."
-else
-    echo "Errore: impossibile creare l'utente PostgreSQL '$OE_USER'."
-    echo "Verifica se l'utente esiste già con: sudo -u postgres psql -c \"\\du\""
-fi
-
 for DIR in "$OE_HOME/logs" "$OE_HOME/data" "$CUSTOM_ADDONS/OCA"; do
     sudo mkdir -p "$DIR" || {
         echo "❌ Impossibile creare la directory: $DIR"
@@ -125,37 +133,33 @@ done
 echo -e "\n---- Clono le Repository Odoo e OCA/web ----"
 if [ ! -d "$OE_HOME_SRV" ]; then
     sudo git clone https://github.com/odoo/odoo.git --depth 1 -b "$OE_VERSION" "$OE_HOME_SRV" || {
-        echo "❌ Impossibile clonare il repository Odoo"
+        echo "❌ Impossibile clonare la repository Odoo"
         exit 1
     }
 fi
 
 if [ ! -d "$CUSTOM_ADDONS/OCA/web" ]; then
     sudo git clone https://github.com/OCA/web.git --depth 1 -b "$OE_VERSION" "$CUSTOM_ADDONS/OCA/web" || {
-        echo "❌ Impossibile clonare il repository OCA/web"
+        echo "❌ Impossibile clonare la repository OCA/web"
         exit 1
     }
 fi
 
 echo -e "\n---- Configuro l'Ambiente Virtuale Python ----"
-sudo mkdir -p "$VENV_PATH"
-sudo chown -R $CURRENT_USER:$CURRENT_USER $VENV_PATH
 if [ ! -d "$VENV_PATH" ]; then
-    sudo python3 -m venv "$VENV_PATH" || {
+    sudo -u $OE_USER python3 -m venv "$VENV_PATH" || {
         echo "❌ Impossibile creare l'ambiente virtuale"
         exit 1
     }
+    sudo chown -R $OE_USER:$OE_USER "$VENV_PATH"
 fi
 
-echo -e "\n---- Installo le Dipendenze Python ----"
-source "$VENV_PATH/bin/activate"
-pip install -r "$OE_HOME_SRV/requirements.txt" || {
+echo -e "\n---- Installo le Dipendenze Python nel venv ----"
+sudo -u $OE_USER $VENV_PATH/bin/pip install -r "$OE_HOME_SRV/requirements.txt" || {
     echo "❌ Impossibile installare i requisiti di Odoo"
     exit 1
 }
-pip install debugpy
-pip install jingtrang
-deactivate
+sudo -u $OE_USER $VENV_PATH/bin/pip install debugpy jingtrang
 
 #####   INSTALLAZIONE NODE.JS E RTLCSS    #####
 echo -e "\n---- Installo nodeJS NPM e rtlcss per LTR support ----"
@@ -164,8 +168,7 @@ sudo npm install -g rtlcss
 
 #####   CONFIGURAZIONE FILE ODOO    #####
 echo -e "\n---- Creo odoo.conf ----"
-sudo touch $OE_HOME/$OE_USER.conf
-sudo bash -c "echo '
+sudo tee "$OE_HOME/$OE_USER.conf" > /dev/null <<EOF
 [options]
 ; Questo è il file di configurazione per $OE_USER
 admin_passwd = admin
@@ -176,14 +179,16 @@ limit_time_real = 1800
 data_dir = $OE_HOME/data
 http_port = ${OE_PORT}
 xmlrpc_port = ${OE_PORT}
-logfile = $OE_HOME/logs/odoo.log
-addons_path = $OE_HOME_SRV/addons,$CUSTOM_ADDONS/OCA/web' > $OE_HOME/$OE_USER.conf"
+logfile = $OE_HOME/$OE_USER$ODOO_MAJOR_VERSION/logs/odoo.log
+addons_path = $OE_HOME_SRV/addons, $CUSTOM_ADDONS/OCA/web
+EOF
+
 
 echo -e "\n---- Creo launch.sh per debug ----"
-sudo touch $OE_HOME_SRV/launch.sh 
+sudo touch "$OE_HOME_SRV/launch.sh"
 sudo bash -c "echo '
 #!/bin/bash
-$VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all' > $OE_HOME_SRV/launch.sh "
+sudo -u $OE_USER PATH=$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all' > $OE_HOME_SRV/launch.sh "
 sudo chown $CURRENT_USER:$CURRENT_USER "$OE_HOME_SRV/launch.sh"
 sudo chmod +x "$OE_HOME_SRV/launch.sh"
 
@@ -192,11 +197,7 @@ echo -e "\n---- Aggiusto i permessi delle cartelle ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV
 sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
 
-sudo chmod -R u+rwx $VENV_PATH
-
-#####    COMPLETAMENTO    #####
 echo -e "\n                     ✅ Installazione di Odoo completata!"
 echo "-----------------------------------------------------------------------------------------------------------------"
-echo "                          Ora puoi lanciare Odoo tramite lo script di lancio                                     "
-echo "                                  cd ${OE_HOME_SRV} && ./launch                                                  "
+echo "                                  Ora puoi lanciare Odoo                                                         "
 echo "-----------------------------------------------------------------------------------------------------------------"
