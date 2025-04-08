@@ -185,19 +185,19 @@ EOF
 
 
 echo -e "\n---- Creo launch.sh per debug ----"
-sudo touch "$OE_HOME_SRV/launch.sh"
+sudo touch "/home/launch.sh"
 sudo bash -c "echo '
 #!/bin/bash
-sudo -u $OE_USER PATH=$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all' > $OE_HOME_SRV/launch.sh "
-sudo chown $CURRENT_USER:$CURRENT_USER "$OE_HOME_SRV/launch.sh"
-sudo chmod +x "$OE_HOME_SRV/launch.sh"
+sudo -u $OE_USER PATH=$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all' > /home/launch.sh "
+sudo chown $CURRENT_USER:$CURRENT_USER "/home/launch.sh"
+sudo chmod +x "/home/launch.sh"
 
 
 echo -e "\n---- Aggiusto i permessi delle cartelle ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV
 sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
 
-echo -e "\n                     ✅ Installazione di Odoo completata!"
+echo -e "\n                     ✅ Installazione di Odoo completata!                                                  "
 echo "-----------------------------------------------------------------------------------------------------------------"
 echo "                                  Ora puoi lanciare Odoo                                                         "
 echo "-----------------------------------------------------------------------------------------------------------------"
