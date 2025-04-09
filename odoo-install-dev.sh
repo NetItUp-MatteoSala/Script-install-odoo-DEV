@@ -25,8 +25,8 @@ OE_PORT="8069"
 OE_HOME="/home/$OE_USER"                                                         #/home/odoo
 ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d'.' -f1)
 OE_HOME_SRV="$OE_HOME/${OE_USER}${ODOO_MAJOR_VERSION}"                           #/home/odoo/odoo18
-VENV_PATH="$OE_HOME/venv/venv${ODOO_MAJOR_VERSION}"                              #/home/odoo/venv14
-CUSTOM_ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                      #/home/odoo/addons/addons14
+VENV_PATH="$OE_HOME/venv/venv${ODOO_MAJOR_VERSION}"                              #/home/odoo/venv18
+CUSTOM_ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                      #/home/odoo/addons/addons18
 
 CURRENT_USER=$(whoami)
 PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
@@ -58,50 +58,39 @@ fi
 
 echo -e "\n---- Verifico versione Python ----"
 
-if [ "$(printf '3.6\n%s' "$PYTHON_VERSION" | sort -V | head -n1)" != "3.6" ]; then
-    echo "⚠️  Errore: Odoo 14 richiede Python 3.6 o superiore"
+if [ "$(printf '3.10\n%s' "$PYTHON_VERSION" | sort -V | head -n1)" != "3.10" ]; then
+    echo "⚠️  Errore: Odoo 18 richiede Python 3.10 o superiore"
     echo "Versione Python attuale: $PYTHON_VERSION"
     cleanup "Versione Python non compatibile"
     exit 1
 fi
 
-echo -e "\n---- Verifico versione Postgres ----"
-
-if ! command -v psql &> /dev/null; then
+echo -e "\n---- Controllo se PostgreSQL è installato ----"
+if ! command -v psql > /dev/null; then
     echo "PostgreSQL non è installato. Procedo con l'installazione..."
-    
-    echo -e "\n---- Installo PostgreSQL ----"
-    sudo apt install -y postgresql postgresql-server-dev-all
-    
-    echo -e "\n---- Abilito PostgreSQL ----"
-    sudo systemctl start postgresql
-    sudo systemctl enable postgresql
-
-    PG_VERSION=$(psql -V | grep -oP '\d+' | head -1)
-
-    if [ "$PG_VERSION" -lt 10 ]; then
-        echo "⚠️  Errore: Odoo 14 richiede PostgreSQL 10 o superiore"
-        echo "Versione PostgreSQL attuale: $PG_VERSION"
-        cleanup "Versione PostgreSQL non compatibile"
+    sudo apt update
+    sudo apt install -y postgresql postgresql-contrib libpq-dev postgresql-server-dev-all || {
+        echo "❌ Impossibile installare PostgreSQL"
         exit 1
-    fi
-    echo "✅ Versione PostgreSQL compatibile: $PG_VERSION"
+    }
+    echo "✅ PostgreSQL installato con successo"
+else
+    echo "✅ PostgreSQL è già installato"
 fi
 
-echo -e "\n---- Creo utente Postgres Odoo e NIU o CSG  ----"
-sudo -u postgres createuser -s odoo
-if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='NIU'" | grep -q 1; then
-    echo "Creo utente PostgreSQL 'NIU'..."
+echo -e "\n---- Creo utente Postgres Odoo  ----"
+sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
+
+echo -e "\n---- Controllo e creo utente Postgres NIU o CSG se necessario ----"
+NIU_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='NIU'")
+CSG_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='CSG'")
+
+if [[ "$NIU_EXISTS" == "1" || "$CSG_EXISTS" == "1" ]]; then
+    echo "✅ Almeno uno tra 'NIU' o 'CSG' esiste già. Nessuna creazione necessaria."
+else
+    echo "Nessuno dei due utenti esiste. Creo 'NIU'..."
     sudo -u postgres createuser -s NIU
     echo "✅ Utente PostgreSQL 'NIU' creato con successo"
-else
-    if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='CSG'" | grep -q 1; then
-        echo "Creo utente PostgreSQL 'CSG'..."
-        sudo -u postgres createuser -s CSG
-        echo "✅ Utente PostgreSQL 'CSG' creato con successo"
-    else
-        echo "⚠️  Gli utenti PostgreSQL 'NIU' e 'CSG' esistono già"
-    fi
 fi
 
 echo -e "\n---- Aggiornamento del sistema ----"
@@ -121,14 +110,8 @@ sudo apt install -y \
 echo -e "\n---- Configuro Utente e directory Odoo ----"
 if ! id "$OE_USER" &>/dev/null; then
     sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
+    sudo adduser $OE_USER sudo
 fi
-
-for DIR in "$OE_HOME/logs" "$OE_HOME/data" "$CUSTOM_ADDONS/OCA"; do
-    sudo mkdir -p "$DIR" || {
-        echo "❌ Impossibile creare la directory: $DIR"
-        exit 1
-    }
-done
 
 echo -e "\n---- Clono le Repository Odoo e OCA/web ----"
 if [ ! -d "$OE_HOME_SRV" ]; then
@@ -168,7 +151,7 @@ sudo npm install -g rtlcss
 
 #####   CONFIGURAZIONE FILE ODOO    #####
 echo -e "\n---- Creo odoo.conf ----"
-sudo tee "$OE_HOME/$OE_USER.conf" > /dev/null <<EOF
+sudo tee "$OE_HOME_SRV/$OE_USER.conf" > /dev/null <<EOF
 [options]
 ; Questo è il file di configurazione per $OE_USER
 admin_passwd = admin
@@ -183,21 +166,29 @@ logfile = $OE_HOME/$OE_USER$ODOO_MAJOR_VERSION/logs/odoo.log
 addons_path = $OE_HOME_SRV/addons, $CUSTOM_ADDONS/OCA/web
 EOF
 
+sudo chown $OE_USER:$OE_USER "$OE_HOME_SRV/$OE_USER.conf"
+sudo chmod 775 "$OE_HOME_SRV/$OE_USER.conf"
+
 
 echo -e "\n---- Creo launch.sh per debug ----"
 sudo touch "/home/launch.sh"
 sudo bash -c "echo '
 #!/bin/bash
-sudo -u $OE_USER PATH=$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME/$OE_USER.conf --dev xml -u all' > /home/launch.sh "
-sudo chown $CURRENT_USER:$CURRENT_USER "/home/launch.sh"
-sudo chmod +x "/home/launch.sh"
+sudo -u $OE_USER PATH=$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME_SRV/$OE_USER.conf --dev xml -u all' > /home/launch.sh"
 
+sudo chmod 755 /home/launch.sh
+sudo chmod +x "/home/launch.sh"
 
 echo -e "\n---- Aggiusto i permessi delle cartelle ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV
 sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
+sudo usermod -aG $OE_USER $CURRENT_USER
+
 
 echo -e "\n                     ✅ Installazione di Odoo completata!                                                  "
 echo "-----------------------------------------------------------------------------------------------------------------"
 echo "                                  Ora puoi lanciare Odoo                                                         "
 echo "-----------------------------------------------------------------------------------------------------------------"
+
+echo "-----------------------     Il sistema si riavvierà in 30 secondi...        -------------------------------------"
+sleep 30 && sudo reboot -h now
