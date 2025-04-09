@@ -156,7 +156,7 @@ sudo tee "$OE_HOME_SRV/$OE_USER.conf" > /dev/null <<EOF
 ; Questo è il file di configurazione per $OE_USER
 admin_passwd = admin
 db_host = False
-db_port = False
+db_port = 5432
 limit_time_cpu = 600
 limit_time_real = 1800
 data_dir = $OE_HOME/data
@@ -185,9 +185,10 @@ sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
 sudo usermod -aG $OE_USER $CURRENT_USER
 
 
-echo -e "\n                     ✅ Installazione di Odoo completata!                                                  "
+echo -e "\n                        Installazione di Odoo completata!                                                   "
 echo "-----------------------------------------------------------------------------------------------------------------"
 echo "                                  Ora puoi lanciare Odoo                                                         "
+echo "                     per vedere i logs tail -f /home/odoo/odoo18/logs/odoo.log                                   "
 echo "-----------------------------------------------------------------------------------------------------------------"
 
 echo "-----------------------     Il sistema si riavvierà in 30 secondi...        -------------------------------------"
