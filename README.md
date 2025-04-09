@@ -66,7 +66,7 @@ host    all             all             0.0.0.0/0               md5
 host    all             all             ::/0                    md5
 ```
 
-/etc/postgresql/16/main/postgresql.conf - scommentare questa riga e sostituirla con:
+/etc/postgresql/16/main/postgresql.conf - scommentare riga 60 e sostituirla con:
 ```
 listen_addresses = '*' 
 ```
