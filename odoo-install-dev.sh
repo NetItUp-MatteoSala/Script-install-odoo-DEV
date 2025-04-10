@@ -20,16 +20,17 @@
 
 #####   VARIABILI DI CONFIGURAZIONE    #####
 OE_VERSION="18.0"
+IS_ENTERPRISE="True"
+
 OE_USER="odoo"
 OE_PORT="8069"
 OE_HOME="/home/$OE_USER"                                                         #/home/odoo
 ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d'.' -f1)
 OE_HOME_SRV="$OE_HOME/${OE_USER}${ODOO_MAJOR_VERSION}"                           #/home/odoo/odoo18
 VENV_PATH="$OE_HOME/venv/venv${ODOO_MAJOR_VERSION}"                              #/home/odoo/venv18
-CUSTOM_ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                      #/home/odoo/addons/addons18
-
+CUSTOM_ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                      #/home/odoo/odoo18/addons/addons18
+ENTERPRISE_ADDONS="$OE_HOME/addons/enterprise${ODOO_MAJOR_VERSION}"
 CURRENT_USER=$(whoami)
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
 
 cleanup() {
     local exit_code=$?
@@ -49,26 +50,29 @@ if ! grep -q "Ubuntu" /etc/os-release; then
     cleanup "Sistema operativo non supportato."
 fi
 
-if [ -z "$OE_VERSION" ]; then
-    echo "Errore: $OE_VERSION non è impostata"
-    echo "Imposta $OE_VERSION con una versione valida di Odoo (es. 14.0)"
-    cleanup "Versione Odoo non specificata"
+if [ "$OE_VERSION" != "18.0" ]; then
+    echo "Questo script funziona solo con Odoo v18.0!"
+    cleanup "Versione Odoo non supportata"
     exit 1
 fi
 
-echo -e "\n---- Verifico versione Python ----"
+echo -e "\n---- Aggiornamento del sistema ----"
+sudo apt update && sudo apt upgrade -y
 
-if [ "$(printf '3.10\n%s' "$PYTHON_VERSION" | sort -V | head -n1)" != "3.10" ]; then
-    echo "⚠️  Errore: Odoo 18 richiede Python 3.10 o superiore"
-    echo "Versione Python attuale: $PYTHON_VERSION"
-    cleanup "Versione Python non compatibile"
+echo -e "\n---- Installo dipendenze di sistema ----"
+sudo apt install -y \
+    python3-dev python3-wheel python3-pip python3-venv python3-setuptools \
+    build-essential libzip-dev libxslt1-dev libldap2-dev \
+    libsasl2-dev node-less libjpeg-dev xfonts-utils libpq-dev libffi-dev \
+    fontconfig git wget libcairo2-dev pkg-config \
+    wkhtmltopdf xfonts-75dpi xfonts-base || {
+    echo "❌ Installazione delle dipendenze di sistema fallita"
     exit 1
-fi
+}
 
 echo -e "\n---- Controllo se PostgreSQL è installato ----"
 if ! command -v psql > /dev/null; then
     echo "PostgreSQL non è installato. Procedo con l'installazione..."
-    sudo apt update
     sudo apt install -y postgresql postgresql-contrib libpq-dev postgresql-server-dev-all || {
         echo "❌ Impossibile installare PostgreSQL"
         exit 1
@@ -78,34 +82,30 @@ else
     echo "✅ PostgreSQL è già installato"
 fi
 
-echo -e "\n---- Creo utente Postgres Odoo  ----"
-sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
+echo -e "\n---- Controllo se l'utente PostgreSQL '$OE_USER' esiste ----"
+ODOO_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolename='odoo'")
+if [ "$ODOO_EXISTS" != "1" ]; then
+    echo "L'utente non esiste. Creo l'utente '$OE_USER'..."
+    sudo -u postgres createuser --createdb --replication "$OE_USER" || {
+        echo "❌ Impossibile creare l'utente PostgreSQL '$OE_USER'"
+        exit 1
+    }
+    echo "✅ Utente '$OE_USER' creato con successo"
+else
+    echo "✅ L'utente '$OE_USER' esiste già"
+fi
 
 echo -e "\n---- Controllo e creo utente Postgres NIU o CSG se necessario ----"
-NIU_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='NIU'")
-CSG_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='CSG'")
+NIU_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='niu'")
+CSG_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='csg'")
 
 if [[ "$NIU_EXISTS" == "1" || "$CSG_EXISTS" == "1" ]]; then
     echo "✅ Almeno uno tra 'NIU' o 'CSG' esiste già. Nessuna creazione necessaria."
 else
     echo "Nessuno dei due utenti esiste. Creo 'NIU'..."
-    sudo -u postgres createuser -s NIU
+    sudo -u postgres createuser --superuser --createdb --replication niu
     echo "✅ Utente PostgreSQL 'NIU' creato con successo"
 fi
-
-echo -e "\n---- Aggiornamento del sistema ----"
-sudo apt update && sudo apt upgrade -y
-
-echo -e "\n---- Installo dipendenze di sistema ----"
-sudo apt install -y \
-    python3-minimal python3-dev python3-full python3-pip python3-venv python3-setuptools \
-    build-essential libzip-dev libxslt1-dev libldap2-dev python3-wheel \
-    libsasl2-dev node-less libjpeg-dev xfonts-utils libpq-dev libffi-dev \
-    fontconfig git wget libcairo2-dev pkg-config \
-    wkhtmltopdf xfonts-75dpi xfonts-base || {
-    echo "❌ Installazione delle dipendenze di sistema fallita"
-    exit 1
-}
 
 echo -e "\n---- Configuro Utente e directory Odoo ----"
 if ! id "$OE_USER" &>/dev/null; then
@@ -119,6 +119,31 @@ if [ ! -d "$OE_HOME_SRV" ]; then
         echo "❌ Impossibile clonare la repository Odoo"
         exit 1
     }
+fi
+
+if [ "$IS_ENTERPRISE" = "True" ]; then
+    echo -e "\n---- Clonazione della Repository Odoo Enterprise ----"
+    sudo pip3 install psycopg2-binary pdfminer.six
+    echo -e "\n--- Creazione del symlink per node"
+    sudo ln -s /usr/bin/nodejs /usr/bin/node
+    sudo -u $OE_USER -c "mkdir $ENTERPRISE_ADDONS"
+
+GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
+    while [[ $GITHUB_RESPONSE == *"Authentication"* ]]; do
+        echo "------------------------WARNING------------------------------"
+        echo "L'autenticazione con Github è fallita! Riprova."
+        printf "Per clonare e installare la versione Enterprise di Odoo, \ndev'essere un partner ufficiale di Odoo e aver accesso a\nhttp://github.com/odoo/enterprise.\n"
+        echo "SUGGERIMENTO: Premi ctrl+c per fermare questo script."
+        echo "-------------------------------------------------------------"
+        echo " "
+        GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
+    done
+
+    echo -e "\n---- Codice Enterprise aggiunto in $ENTERPRISE_ADDONS ----"
+    echo -e "\n---- Installazione delle librerie specifiche per Odoo Enterprise ----"
+    sudo -H pip3 install num2words ofxparse dbfread ebaysdk firebase_admin pyOpenSSL
+    sudo npm install -g less
+    sudo npm install -g less-plugin-clean-css
 fi
 
 if [ ! -d "$CUSTOM_ADDONS/OCA/web" ]; then
@@ -159,12 +184,18 @@ db_host = False
 db_port = 5432
 limit_time_cpu = 600
 limit_time_real = 1800
-data_dir = $OE_HOME/data
+data_dir = $OE_HOME_SRV/data
 http_port = ${OE_PORT}
 xmlrpc_port = ${OE_PORT}
 logfile = $OE_HOME/$OE_USER$ODOO_MAJOR_VERSION/logs/odoo.log
-addons_path = $OE_HOME_SRV/addons, $CUSTOM_ADDONS/OCA/web
+addons_path = $OE_HOME_SRV/addons,$OE_HOME/addons,$ENTERPRISE_ADDONS,$CUSTOM_ADDONS/OCA/web 
 EOF
+
+if [ $IS_ENTERPRISE = "True" ]; then
+    sudo su root -c "printf 'addons_path=${OE_HOME}/enterprise/addons,${OE_HOME_EXT}/addons\n' >> /etc/${OE_CONFIG}.conf"
+else
+    sudo su root -c "printf 'addons_path=${OE_HOME_EXT}/addons,${OE_HOME}/custom/addons\n' >> /etc/${OE_CONFIG}.conf"
+fi
 
 sudo chown $OE_USER:$OE_USER "$OE_HOME_SRV/$OE_USER.conf"
 sudo chmod 775 "$OE_HOME_SRV/$OE_USER.conf"
@@ -174,13 +205,13 @@ echo -e "\n---- Creo launch.sh per debug ----"
 sudo touch "/home/launch.sh"
 sudo bash -c "echo '
 #!/bin/bash
-sudo -u $OE_USER PATH=$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME_SRV/$OE_USER.conf --dev xml -u all' > /home/launch.sh"
+sudo -u $OE_USER PATH=\$PATH $VENV_PATH/bin/python3 -m debugpy --listen 5678 $OE_HOME_SRV/odoo-bin -c $OE_HOME_SRV/$OE_USER.conf --dev xml -u all' > /home/launch.sh"
 
 sudo chmod 755 /home/launch.sh
 sudo chmod +x "/home/launch.sh"
 
 echo -e "\n---- Aggiusto i permessi delle cartelle ----"
-sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV
+sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV/
 sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
 sudo usermod -aG $OE_USER $CURRENT_USER
 
@@ -190,6 +221,3 @@ echo "--------------------------------------------------------------------------
 echo "                                  Ora puoi lanciare Odoo                                                         "
 echo "                     per vedere i logs tail -f /home/odoo/odoo18/logs/odoo.log                                   "
 echo "-----------------------------------------------------------------------------------------------------------------"
-
-echo "-----------------------     Il sistema si riavvierà in 30 secondi...        -------------------------------------"
-sleep 30 && sudo reboot -h now
