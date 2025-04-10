@@ -50,10 +50,6 @@ Questo script automatizza l'installazione di **Odoo Community Edition** (version
 
 ### ❗ Attenzione
 
-Lo script riavvia automaticamente il sistema alla fine per sistemare i permessi delle cartelle.
-Puoi disattivare il riavvio modificando l'ultima riga dello script:
-```sleep 30 && sudo reboot -h now```
-
 Per accedere via SQL client ricordarsi di editare i seguenti file 
 /etc/postgresql/16/main/pg_hba.conf - aggiungere queste regole sostituendo le esistenti con:
 ```
@@ -70,6 +66,8 @@ host    all             all             ::/0                    md5
 ```
 listen_addresses = '*' 
 ```
+
+Per accedere dall'esterno bisogna impostare una password all'utente NIU se non è già esistente
 
 ---
 
