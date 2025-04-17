@@ -28,8 +28,8 @@ OE_HOME="/home/$OE_USER"                                                        
 ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d'.' -f1)
 OE_HOME_SRV="$OE_HOME/${OE_USER}${ODOO_MAJOR_VERSION}"                           #/home/odoo/odoo18
 VENV_PATH="$OE_HOME/venv/venv${ODOO_MAJOR_VERSION}"                              #/home/odoo/venv18
-CUSTOM_ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                      #/home/odoo/odoo18/addons/addons18
-ENTERPRISE_ADDONS="$OE_HOME/addons/enterprise${ODOO_MAJOR_VERSION}"
+ADDONS="$OE_HOME/addons/addons${ODOO_MAJOR_VERSION}"                             #/home/odoo/addons/addons18
+ENTERPRISE_ADDONS="$ADDONS/enterprise"                                           #/home/odoo/addons/addons18/enterprise
 CURRENT_USER=$(whoami)
 
 cleanup() {
@@ -113,7 +113,7 @@ if ! id "$OE_USER" &>/dev/null; then
     sudo adduser $OE_USER sudo
 fi
 
-echo -e "\n---- Clono le Repository Odoo e OCA/web ----"
+echo -e "\n---- Clono la Repository Odoo ----"
 if [ ! -d "$OE_HOME_SRV" ]; then
     sudo git clone https://github.com/odoo/odoo.git --depth 1 -b "$OE_VERSION" "$OE_HOME_SRV" || {
         echo "❌ Impossibile clonare la repository Odoo"
@@ -121,34 +121,18 @@ if [ ! -d "$OE_HOME_SRV" ]; then
     }
 fi
 
-if [ "$IS_ENTERPRISE" = "True" ]; then
-    echo -e "\n---- Clonazione della Repository Odoo Enterprise ----"
-    sudo pip3 install psycopg2-binary pdfminer.six
-    echo -e "\n--- Creazione del symlink per node"
-    sudo ln -s /usr/bin/nodejs /usr/bin/node
-    sudo -u $OE_USER -c "mkdir $ENTERPRISE_ADDONS"
-
-GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
-    while [[ $GITHUB_RESPONSE == *"Authentication"* ]]; do
-        echo "------------------------WARNING------------------------------"
-        echo "L'autenticazione con Github è fallita! Riprova."
-        printf "Per clonare e installare la versione Enterprise di Odoo, \ndev'essere un partner ufficiale di Odoo e aver accesso a\nhttp://github.com/odoo/enterprise.\n"
-        echo "SUGGERIMENTO: Premi ctrl+c per fermare questo script."
-        echo "-------------------------------------------------------------"
-        echo " "
-        GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
-    done
-
-    echo -e "\n---- Codice Enterprise aggiunto in $ENTERPRISE_ADDONS ----"
-    echo -e "\n---- Installazione delle librerie specifiche per Odoo Enterprise ----"
-    sudo -H pip3 install num2words ofxparse dbfread ebaysdk firebase_admin pyOpenSSL
-    sudo npm install -g less
-    sudo npm install -g less-plugin-clean-css
-fi
-
-if [ ! -d "$CUSTOM_ADDONS/OCA/web" ]; then
-    sudo git clone https://github.com/OCA/web.git --depth 1 -b "$OE_VERSION" "$CUSTOM_ADDONS/OCA/web" || {
+echo -e "\n---- Clono OCA/web ----"
+if [ ! -d "$ADDONS/OCA/web" ]; then
+    sudo git clone https://github.com/OCA/web.git --depth 1 -b "$OE_VERSION" "$ADDONS/OCA/web" || {
         echo "❌ Impossibile clonare la repository OCA/web"
+        exit 1
+    }
+fi 
+
+echo -e "\n---- Clono OCA/dms ----"
+if [ ! -d "$ADDONS/OCA/dms" ]; then
+    sudo git clone https://github.com/OCA/dms.git --depth 1 -b "$OE_VERSION" "$ADDONS/OCA/dms" || {
+        echo "❌ Impossibile clonare la repository OCA/dms"
         exit 1
     }
 fi
@@ -169,10 +153,34 @@ sudo -u $OE_USER $VENV_PATH/bin/pip install -r "$OE_HOME_SRV/requirements.txt" |
 }
 sudo -u $OE_USER $VENV_PATH/bin/pip install debugpy jingtrang
 
+if [ "$IS_ENTERPRISE" = "True" ]; then
+    echo -e "\n---- Clonazione della Repository Odoo Enterprise ----"
+    echo -e "\n--- Creazione del symlink per node"
+    sudo -u $OE_USER -c "mkdir $ENTERPRISE_ADDONS"
+
+    GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://Netitup-MatteoSala@github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
+    if [[ $GITHUB_RESPONSE == *"Authentication"* ]]; then
+        echo "❌ Autenticazione fallita. Impossibile installare Odoo Enterprise"
+        exit 1        
+    fi
+
+    echo -e "\n---- Codice Enterprise aggiunto in $ENTERPRISE_ADDONS ----"
+    echo -e "\n---- Installazione delle librerie specifiche per Odoo Enterprise ----"
+    sudo -u $OE_USER $VENV_PATH/bin/pip install num2words ofxparse dbfread ebaysdk firebase_admin pyOpenSSL pdfminer.six
+fi
+
 #####   INSTALLAZIONE NODE.JS E RTLCSS    #####
 echo -e "\n---- Installo nodeJS NPM e rtlcss per LTR support ----"
 sudo apt install nodejs npm -y
-sudo npm install -g rtlcss
+sudo npm install -g rtlcss less-plugin-clean-css less
+sudo npm install -g less
+sudo npm install -g less-plugin-clean-css
+
+ADDONS_PATH="$OE_HOME_SRV/addons,$OE_HOME/addons,$ADDONS/OCA/web,$ADDONS/OCA/dms" 
+
+if [ "$IS_ENTERPRISE" = "True" ]; then
+    ADDONS_PATH="$ADDONS_PATH,$ENTERPRISE_ADDONS"
+fi
 
 #####   CONFIGURAZIONE FILE ODOO    #####
 echo -e "\n---- Creo odoo.conf ----"
@@ -185,17 +193,11 @@ db_port = 5432
 limit_time_cpu = 600
 limit_time_real = 1800
 data_dir = $OE_HOME_SRV/data
-http_port = ${OE_PORT}
-xmlrpc_port = ${OE_PORT}
+http_port = $OE_PORT
+xmlrpc_port = $OE_PORT
 logfile = $OE_HOME/$OE_USER$ODOO_MAJOR_VERSION/logs/odoo.log
-addons_path = $OE_HOME_SRV/addons,$OE_HOME/addons,$ENTERPRISE_ADDONS,$CUSTOM_ADDONS/OCA/web 
+addons_path = $ADDONS_PATH
 EOF
-
-if [ $IS_ENTERPRISE = "True" ]; then
-    sudo su root -c "printf 'addons_path=${OE_HOME}/enterprise/addons,${OE_HOME_EXT}/addons\n' >> /etc/${OE_CONFIG}.conf"
-else
-    sudo su root -c "printf 'addons_path=${OE_HOME_EXT}/addons,${OE_HOME}/custom/addons\n' >> /etc/${OE_CONFIG}.conf"
-fi
 
 sudo chown $OE_USER:$OE_USER "$OE_HOME_SRV/$OE_USER.conf"
 sudo chmod 775 "$OE_HOME_SRV/$OE_USER.conf"
@@ -212,7 +214,7 @@ sudo chmod +x "/home/launch.sh"
 
 echo -e "\n---- Aggiusto i permessi delle cartelle ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME_SRV/
-sudo chown -R $OE_USER:$OE_USER $CUSTOM_ADDONS
+sudo chown -R $OE_USER:$OE_USER $ADDONS
 sudo usermod -aG $OE_USER $CURRENT_USER
 
 
