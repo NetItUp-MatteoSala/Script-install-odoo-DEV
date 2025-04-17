@@ -35,6 +35,7 @@ Questo script automatizza l'installazione di **Odoo Community Edition** (version
 2. Esegui lo script con:
    ```./odoo-install.sh```
 
+NB. Editare il campo PAT con la propria se si vuole clonare Odoo Enterprise
 ---
 
 ### 📁 Struttura delle Cartelle
@@ -42,6 +43,7 @@ Questo script automatizza l'installazione di **Odoo Community Edition** (version
 - /home/odoo/odoo18 → Codice sorgente Odoo
 - /home/odoo/venv/venv18 → Virtualenv Python
 - /home/odoo/addons/addons18/OCA/web → Moduli OCA
+- /home/odoo/addons/addons18/enterprise → Se enterprise è settato a true
 - /home/odoo/odoo18/odoo.conf → File di configurazione
 - /home/odoo/odoo18/logs/odoo.log → ```tail -f```  per visualizzare i logs
 - /home/launch.sh → Script per avvio/debug rapido

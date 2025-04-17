@@ -6,7 +6,8 @@
 # Istruzioni per l'uso:
 # 1. Rendere eseguibile lo script con il comando: 
 #    sudo chmod +x odoo-install-dev.sh
-# 2. Eseguire lo script con il comando:
+# 2. Editare la PAT per autenticarsi col proprio profilo github che ha accesso alla repo di Odoo Enterprise
+# 3. Eseguire lo script con il comando:
 #    ./odoo-install-dev.sh
 #
 # Funzionalità principali:
@@ -21,6 +22,7 @@
 #####   VARIABILI DI CONFIGURAZIONE    #####
 OE_VERSION="18.0"
 IS_ENTERPRISE="True"
+PAT=""
 
 OE_USER="odoo"
 OE_PORT="8069"
@@ -86,11 +88,11 @@ echo -e "\n---- Controllo se l'utente PostgreSQL '$OE_USER' esiste ----"
 ODOO_EXISTS=$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolename='odoo'")
 if [ "$ODOO_EXISTS" != "1" ]; then
     echo "L'utente non esiste. Creo l'utente '$OE_USER'..."
-    sudo -u postgres createuser --createdb --replication "$OE_USER" || {
+    sudo -u postgres createuser --createdb --replication "$OE_USER" && {
+        echo "✅ Utente '$OE_USER' creato con successo"
+    } || {
         echo "❌ Impossibile creare l'utente PostgreSQL '$OE_USER'"
-        exit 1
     }
-    echo "✅ Utente '$OE_USER' creato con successo"
 else
     echo "✅ L'utente '$OE_USER' esiste già"
 fi
@@ -151,14 +153,14 @@ sudo -u $OE_USER $VENV_PATH/bin/pip install -r "$OE_HOME_SRV/requirements.txt" |
     echo "❌ Impossibile installare i requisiti di Odoo"
     exit 1
 }
-sudo -u $OE_USER $VENV_PATH/bin/pip install debugpy jingtrang
+sudo -u $OE_USER $VENV_PATH/bin/pip install debugpy jingtrang rlPyCairo
 
 if [ "$IS_ENTERPRISE" = "True" ]; then
     echo -e "\n---- Clonazione della Repository Odoo Enterprise ----"
     echo -e "\n--- Creazione del symlink per node"
     sudo -u $OE_USER -c "mkdir $ENTERPRISE_ADDONS"
 
-    GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://Netitup-MatteoSala@github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
+    GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://${PAT}@github.com/odoo/enterprise "$ENTERPRISE_ADDONS" 2>&1)
     if [[ $GITHUB_RESPONSE == *"Authentication"* ]]; then
         echo "❌ Autenticazione fallita. Impossibile installare Odoo Enterprise"
         exit 1        
