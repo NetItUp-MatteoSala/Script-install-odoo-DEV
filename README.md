@@ -75,4 +75,4 @@ Per accedere dall'esterno bisogna impostare una password all'utente NIU se non �
 
 ### ✍️ Autore
 
-Script creato per automatizzare ambienti di sviluppo Odoo da Netitup-MatteoSala 🚀
+Matteo Sala - NET IT UP 🚀
